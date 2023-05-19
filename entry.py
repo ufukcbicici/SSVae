@@ -10,9 +10,9 @@ from scipy.stats import norm, multivariate_normal
 from vector_dataset import VectorDataset
 
 input_dim = 2
-embedding_dim = 2
-hidden_layers_encoder = [16, 8]
-hidden_layers_decoder = [8, 16]
+embedding_dim = 1
+hidden_layers_encoder = [512, 256, 128]
+hidden_layers_decoder = [128, 256, 512]
 
 if __name__ == "__main__":
     vae = VariationalAutoencoder(input_dim=input_dim,
@@ -28,9 +28,9 @@ if __name__ == "__main__":
 
     data_loader = torch.utils.data.DataLoader(VectorDataset(X_=samples,
                                                             y_=np.zeros(shape=(samples.shape[0],))),
-                                              batch_size=samples.shape[0], shuffle=False,
-                                              num_workers=1, pin_memory=True)
-    vae.fit(dataset=data_loader, epoch_count=1000)
+                                              batch_size=1024, shuffle=True,
+                                              num_workers=2, pin_memory=True)
+    vae.fit(dataset=data_loader, epoch_count=1000, weight_decay=0.0)
 
     # mu = torch.tensor(np.array([1.0, 2.0]))
     # std = torch.tensor(np.array([1.5, 2.5]))

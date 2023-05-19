@@ -25,7 +25,7 @@ class VariationalAutoencoder(nn.Module):
                 in_features=self.hiddenLayersEncoder[layer_id],
                 out_features=self.hiddenLayersEncoder[layer_id + 1])
             if layer_id < len(self.hiddenLayersEncoder) - 2:
-                encoder_layers["encoder_nonlinearity_{0}".format(layer_id)] = torch.nn.Softplus()
+                encoder_layers["encoder_nonlinearity_{0}".format(layer_id)] = torch.nn.ReLU()
         self.encoder = nn.Sequential(encoder_layers)
 
         # The network that generates parameters for the distribution p(x|z) (decoder)
@@ -35,10 +35,11 @@ class VariationalAutoencoder(nn.Module):
                 in_features=self.hiddenLayersDecoder[layer_id],
                 out_features=self.hiddenLayersDecoder[layer_id + 1])
             if layer_id < len(self.hiddenLayersEncoder) - 2:
-                decoder_layers["decoder_nonlinearity_{0}".format(layer_id)] = torch.nn.Softplus()
+                decoder_layers["decoder_nonlinearity_{0}".format(layer_id)] = torch.nn.ReLU()
         self.decoder = nn.Sequential(decoder_layers)
 
         self.zGaussian = None
+        self.logScale = nn.Parameter(torch.Tensor([0.0]))
 
     def kl_divergence(self, z, mu, std):
         # --------------------------
@@ -118,10 +119,57 @@ class VariationalAutoencoder(nn.Module):
 
         print("X")
 
-    def fit(self, dataset, epoch_count):
+    def calculate_loss_v2(self, X):
+        # Calculate the parameters for the approximate posterior Q(z|x) for every x in X.
+        encoder_params = self.encoder(X)
+        mu_q_z_given_x = encoder_params[:, :self.embeddingDim]
+        std_q_z_given_x = torch.exp(encoder_params[:, self.embeddingDim:] / 2)
+
+        # Calculate D[Q(z|x)||P(z)]
+        # Calculate the KL-Divergence for each X. It can be analytically calculated in close form.
+        kl_divergences = self.kl_divergence_from_standard_mv_normal_batch(mu=mu_q_z_given_x,
+                                                                          std=std_q_z_given_x)
+
+        # Calculate E_{z ~ Q(z|x)} [log P(x|z)] - The reconstruction loss or the log likelihood.
+        q_z_given_x = torch.distributions.Normal(mu_q_z_given_x, 1e-10*torch.ones_like(std_q_z_given_x))
+        z = q_z_given_x.rsample()
+        # Calculate the parameters of the likelihood function P(x|z)
+        x_hat = self.decoder(z)
+        # Measure the likelihood of the observed X under P(x|z)
+        scale = torch.exp(self.logScale)
+        mean = x_hat
+        p_x_given_z = torch.distributions.Normal(mean, scale)
+
+        # measure prob of seeing image under p(x|z)
+        log_p_x_given_z = p_x_given_z.log_prob(X)
+        # Check if log_p_x_given_z is calculated correctly
+        # for idx in range(X.shape[0]):
+        #     x_s = X[idx].detach().numpy()
+        #     rv = multivariate_normal(mean[idx].detach().numpy(), scale.detach().numpy() * np.ones_like(x_s))
+        #     log_likelihood_2 = rv.logpdf(x_s)
+        #     assert np.allclose(np.sum(log_p_x_given_z[idx].detach().numpy()), log_likelihood_2)
+        log_p_x_given_z = torch.sum(log_p_x_given_z, dim=1)
+
+        elbo = (kl_divergences - log_p_x_given_z)
+        loss = elbo.mean()
+        return loss
+
+    def fit(self, dataset, epoch_count, weight_decay):
         self.zGaussian = torch.distributions.Normal(
             torch.zeros(size=(dataset.dataset.datasetDimensionality, ), dtype=torch.float32),
             torch.ones(size=(dataset.dataset.datasetDimensionality, ), dtype=torch.float32))
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=weight_decay)
+
         for epoch_id in range(epoch_count):
-            for X, y in dataset:
-                self.calculate_loss(X=X.to(torch.float32))
+
+            for i, (X, y) in enumerate(dataset):
+                optimizer.zero_grad()
+                with torch.set_grad_enabled(True):
+                    loss = self.calculate_loss_v2(X=X.to(torch.float32))
+                    loss.backward()
+                    optimizer.step()
+                    print("Epoch:{0} Iteration:{1} Loss:{2}".format(epoch_id, i, loss))
+
+
+
+
