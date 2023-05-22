@@ -190,3 +190,7 @@ class VariationalAutoencoder(nn.Module):
     # def load_model(self, model_path):
     #     pass
 
+    def encode_x(self, x):
+        encoder_params = self.encoder(x)
+        mu_q_z_given_x = encoder_params[:, :self.embeddingDim]
+        return mu_q_z_given_x

@@ -48,9 +48,9 @@ if __name__ == "__main__":
                                  z_sample_count=1)
     # vae.fit(dataset=data_loader, epoch_count=100000, weight_decay=0.00005)
 
-    for i in range(1, 47):
+    for i in [50000, 100000, 150000, 200000, 250000, 300000, 350000, 400000, 430000]:
         vae_model_checkpoint_path = os.path.join(os.path.split(os.path.abspath(__file__))[0],
-                                                 "checkpoints", "vae_{0}.pth".format(i * 5000))
+                                                 "checkpoints", "vae_{0}.pth".format(i))
         vae_checkpoint = torch.load(vae_model_checkpoint_path)
         vae.load_state_dict(state_dict=vae_checkpoint["model_state_dict"])
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
         X_hat = pca.transform(X_hat)
         plt.plot(X_hat[:, 0], X_hat[:, 1], 'x')
         plt.axis('equal')
-        plt.title("Checkpoint {0}".format(i * 5000))
+        plt.title("Checkpoint {0}".format(i))
         plt.show()
         print("X")
 

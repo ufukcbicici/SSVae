@@ -17,6 +17,7 @@ from sklearn.datasets import load_breast_cancer
 
 if __name__ == "__main__":
     np.random.seed(67)
+    batch_size = 128
     labeled_percentage = 0.25
     test_percentage = 0.1
     normalize_data = True
@@ -39,14 +40,14 @@ if __name__ == "__main__":
     X_unlabeled, X_labeled, y_unlabeled, y_labeled = train_test_split(X_train, y_train, test_size=labeled_percentage)
 
     unlabeled_data = torch.utils.data.DataLoader(VectorDataset(X_=X_unlabeled, y_=y_unlabeled),
-                                                 batch_size=X_unlabeled.shape[0], shuffle=True,
-                                                 num_workers=2, pin_memory=True)
+                                                 batch_size=batch_size, shuffle=True,
+                                                 num_workers=0, pin_memory=True)
     labeled_data = torch.utils.data.DataLoader(VectorDataset(X_=X_labeled, y_=y_labeled),
-                                               batch_size=X_labeled.shape[0], shuffle=True,
-                                               num_workers=2, pin_memory=True)
+                                               batch_size=batch_size, shuffle=True,
+                                               num_workers=0, pin_memory=True)
     test_data = torch.utils.data.DataLoader(VectorDataset(X_=X_test, y_=y_test),
-                                            batch_size=X_test.shape[0], shuffle=True,
-                                            num_workers=2, pin_memory=True)
+                                            batch_size=batch_size, shuffle=True,
+                                            num_workers=0, pin_memory=True)
 
     vae = VariationalAutoencoder(input_dim=30,
                                  embedding_dim=8,
@@ -54,7 +55,7 @@ if __name__ == "__main__":
                                  hidden_layers_decoder=[128, 256, 512],
                                  z_sample_count=1)
     vae_model_checkpoint_path = os.path.join(os.path.split(os.path.abspath(__file__))[0],
-                                             "checkpoints", "vae_230000.pth")
+                                             "checkpoints", "vae_430000.pth")
     vae_checkpoint = torch.load(vae_model_checkpoint_path)
     vae.load_state_dict(state_dict=vae_checkpoint["model_state_dict"])
 
@@ -67,7 +68,8 @@ if __name__ == "__main__":
         hidden_layers_p_x_given_yz=hidden_layers_decoder,
         m1_model=vae)
 
-    ssvae.fit(labeled_data=labeled_data, unlabeled_data=unlabeled_data, epoch_count=100000)
+    ssvae.fit(labeled_data=labeled_data, unlabeled_data=unlabeled_data, epoch_count=100000,
+              weight_decay=0.00005)
 
 
 

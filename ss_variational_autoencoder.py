@@ -73,7 +73,7 @@ class SSVariationalAutoencoder(nn.Module):
         # log P(x|y,z)
         log_probs_arr = []
         for label in range(self.classCount):
-            x_hat = self.hiddenLayers_P_x_given_yz[label](z)
+            x_hat = self.P_x_given_yz_generator_networks[label](z)
             # Measure the likelihood of the observed X under P(x|y,z)
             scale = torch.exp(self.logScale)
             mean = x_hat
@@ -85,6 +85,10 @@ class SSVariationalAutoencoder(nn.Module):
         labels_one_hot_arr = torch.nn.functional.one_hot(y, self.classCount)
         final_log_probs = labels_one_hot_arr * log_probs_arr
         final_log_probs = torch.sum(final_log_probs, dim=1)
+        # Assert that the selection logic worked correctly
+        assert all([np.array_equal(final_log_probs.detach().numpy()[idx],
+                                   log_probs_arr.detach().numpy()[idx, y.numpy()[idx]])
+                    for idx in range(y.shape[0])])
         mean_likelihood = torch.mean(final_log_probs)
 
         # log P(y)
@@ -98,11 +102,25 @@ class SSVariationalAutoencoder(nn.Module):
         q_z_given_x.log_prob(value=z)
         print("X")
 
-    def fit(self, labeled_data, unlabeled_data, epoch_count):
+    def fit(self, labeled_data, unlabeled_data, epoch_count, weight_decay):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=weight_decay)
+
         for epoch_id in range(epoch_count):
             print("Epoch:{0}".format(epoch_id))
+            unlabeled_data_loader = iter(unlabeled_data)
             for x_l, y in labeled_data:
                 # Get unlabeled data
-                x_u, _ = next(iter(unlabeled_data))
-                print("X")
-                # Calculate the ELBO for the labeled data
+                try:
+                    x_u, _ = next(unlabeled_data_loader)
+                except StopIteration:
+                    unlabeled_data_loader = iter(unlabeled_data)
+                    x_u, _ = next(unlabeled_data_loader)
+
+                optimizer.zero_grad()
+                with torch.no_grad():
+                    x_l_embedding = self.m1Model.encode_x(x_l.to(torch.float32))
+                    x_u_embedding = self.m1Model.encode_x(x_u.to(torch.float32))
+
+                with torch.set_grad_enabled(True):
+                    # Calculate the ELBO for the labeled data
+                    labeled_elbo = self.get_labeled_ELBO(x=x_l_embedding, y=y.to(torch.int64))
