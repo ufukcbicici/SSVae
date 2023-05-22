@@ -98,12 +98,11 @@ class SSVariationalAutoencoder(nn.Module):
         q_z_given_x.log_prob(value=z)
         print("X")
 
-
-
     def fit(self, labeled_data, unlabeled_data, epoch_count):
         for epoch_id in range(epoch_count):
+            print("Epoch:{0}".format(epoch_id))
             for x_l, y in labeled_data:
                 # Get unlabeled data
-                x_u, _ = unlabeled_data.next()
-
+                x_u, _ = next(iter(unlabeled_data))
+                print("X")
                 # Calculate the ELBO for the labeled data

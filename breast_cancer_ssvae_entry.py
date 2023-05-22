@@ -66,7 +66,9 @@ if __name__ == "__main__":
         hidden_layers_q_y_given_x_discriminator=hidden_layers_encoder,
         hidden_layers_p_x_given_yz=hidden_layers_decoder,
         m1_model=vae)
-    print("X")
+
+    ssvae.fit(labeled_data=labeled_data, unlabeled_data=unlabeled_data, epoch_count=100000)
+
 
 
     #
