@@ -4,14 +4,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import os
 from scipy.stats import multivariate_normal
 
 
 class VariationalAutoencoder(nn.Module):
     def __init__(self, input_dim, embedding_dim,
-                 hidden_layers_encoder, hidden_layers_decoder, z_sample_count,
-                 *args, **kwargs):
-        super().__init__(*args, **kwargs)
+                 hidden_layers_encoder, hidden_layers_decoder, z_sample_count):
+        super().__init__()
         self.inputDim = input_dim
         self.embeddingDim = embedding_dim
         self.hiddenLayersEncoder = [input_dim, *hidden_layers_encoder, 2 * embedding_dim]
@@ -25,7 +25,7 @@ class VariationalAutoencoder(nn.Module):
                 in_features=self.hiddenLayersEncoder[layer_id],
                 out_features=self.hiddenLayersEncoder[layer_id + 1])
             if layer_id < len(self.hiddenLayersEncoder) - 2:
-                encoder_layers["encoder_nonlinearity_{0}".format(layer_id)] = torch.nn.ReLU()
+                encoder_layers["encoder_nonlinearity_{0}".format(layer_id)] = torch.nn.Softplus()
         self.encoder = nn.Sequential(encoder_layers)
 
         # The network that generates parameters for the distribution p(x|z) (decoder)
@@ -35,7 +35,7 @@ class VariationalAutoencoder(nn.Module):
                 in_features=self.hiddenLayersDecoder[layer_id],
                 out_features=self.hiddenLayersDecoder[layer_id + 1])
             if layer_id < len(self.hiddenLayersEncoder) - 2:
-                decoder_layers["decoder_nonlinearity_{0}".format(layer_id)] = torch.nn.ReLU()
+                decoder_layers["decoder_nonlinearity_{0}".format(layer_id)] = torch.nn.Softplus()
         self.decoder = nn.Sequential(decoder_layers)
 
         self.zGaussian = None
@@ -131,7 +131,7 @@ class VariationalAutoencoder(nn.Module):
                                                                           std=std_q_z_given_x)
 
         # Calculate E_{z ~ Q(z|x)} [log P(x|z)] - The reconstruction loss or the log likelihood.
-        q_z_given_x = torch.distributions.Normal(mu_q_z_given_x, 1e-10*torch.ones_like(std_q_z_given_x))
+        q_z_given_x = torch.distributions.Normal(mu_q_z_given_x, std_q_z_given_x)
         z = q_z_given_x.rsample()
         # Calculate the parameters of the likelihood function P(x|z)
         x_hat = self.decoder(z)
@@ -154,14 +154,13 @@ class VariationalAutoencoder(nn.Module):
         loss = elbo.mean()
         return loss
 
-    def fit(self, dataset, epoch_count, weight_decay):
+    def fit(self, dataset, epoch_count, weight_decay, checkpoint_period):
         self.zGaussian = torch.distributions.Normal(
             torch.zeros(size=(dataset.dataset.datasetDimensionality, ), dtype=torch.float32),
             torch.ones(size=(dataset.dataset.datasetDimensionality, ), dtype=torch.float32))
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=weight_decay)
 
         for epoch_id in range(epoch_count):
-
             for i, (X, y) in enumerate(dataset):
                 optimizer.zero_grad()
                 with torch.set_grad_enabled(True):
@@ -169,7 +168,25 @@ class VariationalAutoencoder(nn.Module):
                     loss.backward()
                     optimizer.step()
                     print("Epoch:{0} Iteration:{1} Loss:{2}".format(epoch_id, i, loss))
+            if epoch_id % checkpoint_period == 0:
+                self.save_model(epoch=epoch_id)
 
+        self.save_model(epoch=epoch_count + 1)
 
+    def save_model(self, epoch):
+        checkpoint_file_path = os.path.join(os.path.split(os.path.abspath(__file__))[0],
+                                            "{0}_{1}.pth".format("vae", epoch))
+        torch.save({
+            "model_state_dict": self.state_dict()
+        }, checkpoint_file_path)
 
+    def sample_x(self, sample_count):
+        p = torch.distributions.Normal(torch.zeros(size=(self.embeddingDim, )),
+                                       torch.ones(size=(self.embeddingDim, )))
+        Z = p.sample(sample_shape=torch.Size((sample_count, )))
+        X = self.decoder(Z)
+        return X
+
+    # def load_model(self, model_path):
+    #     pass
 
