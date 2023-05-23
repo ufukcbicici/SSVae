@@ -30,7 +30,7 @@ class SSVariationalAutoencoder(nn.Module):
 
         # Q(y|x) -> The discriminator
         self.hiddenLayers_Q_y_given_x = [input_dim, *hidden_layers_q_y_given_x_discriminator, class_count]
-        self.Q_z_given_y_discriminator_network = nn.Sequential(
+        self.Q_y_given_x_discriminator_network = nn.Sequential(
             self.create_mlp(network_name="Q_y_given_x",
                             hidden_layers=self.hiddenLayers_Q_y_given_x))
 
@@ -50,7 +50,7 @@ class SSVariationalAutoencoder(nn.Module):
         # The prior p(z)
         self.P_z = torch.distributions.Normal(torch.zeros(size=(self.embeddingDim,)),
                                               torch.ones(size=(self.embeddingDim,)))
-        self.logScale = nn.Parameter(torch.Tensor([0.0]))
+        self.logScale = nn.Parameter(torch.Tensor([0.0] * self.classCount))
 
     def create_mlp(self, network_name, hidden_layers):
         layers = OrderedDict()
@@ -75,32 +75,50 @@ class SSVariationalAutoencoder(nn.Module):
         for label in range(self.classCount):
             x_hat = self.P_x_given_yz_generator_networks[label](z)
             # Measure the likelihood of the observed X under P(x|y,z)
-            scale = torch.exp(self.logScale)
+            scale = torch.exp(self.logScale[label])
             mean = x_hat
             p_x_given_yz = torch.distributions.Normal(mean, scale)
-            log_p_x_given_yz = p_x_given_yz.log_prob(x)
-            log_p_x_given_yz = torch.sum(log_p_x_given_yz, dim=1)
-            log_probs_arr.append(log_p_x_given_yz)
+            log_probs = p_x_given_yz.log_prob(x)
+            log_probs = torch.sum(log_probs, dim=1)
+            log_probs_arr.append(log_probs)
         log_probs_arr = torch.stack(log_probs_arr, dim=1)
         labels_one_hot_arr = torch.nn.functional.one_hot(y, self.classCount)
-        final_log_probs = labels_one_hot_arr * log_probs_arr
-        final_log_probs = torch.sum(final_log_probs, dim=1)
+        log_p_x_given_yz = labels_one_hot_arr * log_probs_arr
+        log_p_x_given_yz = torch.sum(log_p_x_given_yz, dim=1)
         # Assert that the selection logic worked correctly
-        assert all([np.array_equal(final_log_probs.detach().numpy()[idx],
+        assert all([np.array_equal(log_p_x_given_yz.detach().numpy()[idx],
                                    log_probs_arr.detach().numpy()[idx, y.numpy()[idx]])
                     for idx in range(y.shape[0])])
-        mean_likelihood = torch.mean(final_log_probs)
+        # log_p_x_given_yz = torch.mean(log_p_x_given_yz)
 
         # log P(y)
         log_p_y = self.P_y.log_prob(value=y)
-        log_p_y = torch.mean(log_p_y)
+        # log_p_y = torch.mean(log_p_y)
 
         # log P(z)
         log_p_z = self.P_z.log_prob(value=z)
+        # log_p_z = torch.mean(log_p_z)
 
         # log Q(z|x)
-        q_z_given_x.log_prob(value=z)
-        print("X")
+        log_q_z_given_x = q_z_given_x.log_prob(value=z)
+        # log_q_z_given_x = torch.mean(log_q_z_given_x)
+
+        labeled_elbo = log_p_x_given_yz + log_p_y + log_p_z - log_q_z_given_x
+        return labeled_elbo
+
+    def get_unlabeled_elbo(self, x):
+        q_y_given_x_activations = self.Q_y_given_x_discriminator_network(x)
+        q_y_given_x_probs = torch.softmax(q_y_given_x_activations, dim=1)
+        q_y_given_x_log_probs = torch.log(q_y_given_x_probs)
+        for y in range(self.classCount):
+            q_y_given_x_probs_label = q_y_given_x_probs[:, y]
+            y_label = torch.tensor([y] * x.shape[0])
+            labeled_elbo_y = self.get_labeled_ELBO(x=x, y=y_label)
+
+
+
+
+
 
     def fit(self, labeled_data, unlabeled_data, epoch_count, weight_decay):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=weight_decay)
@@ -124,3 +142,5 @@ class SSVariationalAutoencoder(nn.Module):
                 with torch.set_grad_enabled(True):
                     # Calculate the ELBO for the labeled data
                     labeled_elbo = self.get_labeled_ELBO(x=x_l_embedding, y=y.to(torch.int64))
+                    # Calculate the ELBO for the unlabeled data
+                    self.get_unlabeled_elbo(x=x_u_embedding)
