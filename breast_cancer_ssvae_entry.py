@@ -68,9 +68,11 @@ if __name__ == "__main__":
         hidden_layers_p_x_given_yz=hidden_layers_decoder,
         m1_model=vae)
 
-    ssvae.fit(labeled_data=labeled_data, unlabeled_data=unlabeled_data, epoch_count=100000,
-              weight_decay=0.00005)
-
+    ssvae.fit(labeled_data=labeled_data, unlabeled_data=unlabeled_data, test_data=test_data,
+              epoch_count=1000000, weight_decay=0.00005, validation_period=100, alpha_coeff=1.0)
+    # ssvae.fit_only_labeled(labeled_data=labeled_data, test_data=test_data,
+    #                        epoch_count=10000, weight_decay=0.00005,
+    #                        validation_period=1)
 
 
     #

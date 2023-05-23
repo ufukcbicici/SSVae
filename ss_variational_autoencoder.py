@@ -51,6 +51,7 @@ class SSVariationalAutoencoder(nn.Module):
         self.P_z = torch.distributions.Normal(torch.zeros(size=(self.embeddingDim,)),
                                               torch.ones(size=(self.embeddingDim,)))
         self.logScale = nn.Parameter(torch.Tensor([0.0] * self.classCount))
+        self.crossEntropyLoss = torch.nn.CrossEntropyLoss()
 
     def create_mlp(self, network_name, hidden_layers):
         layers = OrderedDict()
@@ -97,10 +98,12 @@ class SSVariationalAutoencoder(nn.Module):
 
         # log P(z)
         log_p_z = self.P_z.log_prob(value=z)
+        log_p_z = torch.sum(log_p_z, dim=1)
         # log_p_z = torch.mean(log_p_z)
 
         # log Q(z|x)
         log_q_z_given_x = q_z_given_x.log_prob(value=z)
+        log_q_z_given_x = torch.sum(log_q_z_given_x, dim=1)
         # log_q_z_given_x = torch.mean(log_q_z_given_x)
 
         labeled_elbo = log_p_x_given_yz + log_p_y + log_p_z - log_q_z_given_x
@@ -109,22 +112,25 @@ class SSVariationalAutoencoder(nn.Module):
     def get_unlabeled_elbo(self, x):
         q_y_given_x_activations = self.Q_y_given_x_discriminator_network(x)
         q_y_given_x_probs = torch.softmax(q_y_given_x_activations, dim=1)
-        q_y_given_x_log_probs = torch.log(q_y_given_x_probs)
+        q_y_given_x_log_probs = torch.log_softmax(q_y_given_x_activations, dim=1)
+        label_results = []
         for y in range(self.classCount):
             q_y_given_x_probs_label = q_y_given_x_probs[:, y]
             y_label = torch.tensor([y] * x.shape[0])
             labeled_elbo_y = self.get_labeled_ELBO(x=x, y=y_label)
+            q_y_given_x_log_probs_label = q_y_given_x_log_probs[:, y]
+            label_result = q_y_given_x_probs_label * labeled_elbo_y
+            label_result -= q_y_given_x_probs_label * q_y_given_x_log_probs_label
+            label_results.append(label_result)
+        label_results = torch.stack(label_results, dim=1)
+        unlabeled_elbo = torch.sum(label_results, dim=1)
+        return unlabeled_elbo
 
-
-
-
-
-
-    def fit(self, labeled_data, unlabeled_data, epoch_count, weight_decay):
+    def fit(self, labeled_data, unlabeled_data, test_data, epoch_count, weight_decay, validation_period, alpha_coeff):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=weight_decay)
 
         for epoch_id in range(epoch_count):
-            print("Epoch:{0}".format(epoch_id))
+            self.train()
             unlabeled_data_loader = iter(unlabeled_data)
             for x_l, y in labeled_data:
                 # Get unlabeled data
@@ -142,5 +148,60 @@ class SSVariationalAutoencoder(nn.Module):
                 with torch.set_grad_enabled(True):
                     # Calculate the ELBO for the labeled data
                     labeled_elbo = self.get_labeled_ELBO(x=x_l_embedding, y=y.to(torch.int64))
+                    labeled_elbo = -1.0 * torch.mean(labeled_elbo)
                     # Calculate the ELBO for the unlabeled data
-                    self.get_unlabeled_elbo(x=x_u_embedding)
+                    unlabeled_elbo = self.get_unlabeled_elbo(x=x_u_embedding)
+                    unlabeled_elbo = -1.0 * torch.mean(unlabeled_elbo)
+                    # Calculate the cross entropy loss
+                    q_y_given_x_activations = self.Q_y_given_x_discriminator_network(x_l_embedding)
+                    classification_loss = self.crossEntropyLoss(q_y_given_x_activations, y.to(torch.int64))
+                    total_loss = labeled_elbo + unlabeled_elbo + alpha_coeff * classification_loss
+                    total_loss.backward()
+                    optimizer.step()
+
+                if epoch_id % validation_period == 0:
+                    print("Epoch:{0}".format(epoch_id))
+                    print("Classification loss:{0}".format(classification_loss))
+                    print("Labeled ELBO:{0}".format(labeled_elbo))
+                    print("Unlabeled ELBO loss:{0}".format(unlabeled_elbo))
+                    training_accuracy = self.validate(labeled_data=labeled_data)
+                    print("Epoch {0} training accuracy:{1}".format(epoch_id, training_accuracy))
+                    test_accuracy = self.validate(labeled_data=test_data)
+                    print("Epoch {0} test accuracy:{1}".format(epoch_id, test_accuracy))
+
+    def validate(self, labeled_data):
+        self.eval()
+        predictions = []
+        ground_truths = []
+        for x, y in labeled_data:
+            x_l_embedding = self.m1Model.encode_x(x.to(torch.float32))
+            q_y_given_x_activations = self.Q_y_given_x_discriminator_network(x_l_embedding).detach().numpy()
+            predicted = np.argmax(q_y_given_x_activations, axis=1)
+            ground_truths.append(y.numpy())
+            predictions.append(predicted)
+        ground_truths = np.concatenate(ground_truths)
+        predictions = np.concatenate(predictions)
+        accuracy = np.mean(ground_truths == predictions)
+        print("Accuracy:{0}".format(accuracy))
+        return accuracy
+
+    def fit_only_labeled(self, labeled_data, test_data, epoch_count, weight_decay, validation_period):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=weight_decay)
+        for epoch_id in range(epoch_count):
+            self.train()
+            print("Epoch:{0}".format(epoch_id))
+            for x, y in labeled_data:
+                optimizer.zero_grad()
+                with torch.no_grad():
+                    x_l_embedding = self.m1Model.encode_x(x.to(torch.float32))
+                with torch.set_grad_enabled(True):
+                    q_y_given_x_activations = self.Q_y_given_x_discriminator_network(x_l_embedding)
+                    classification_loss = self.crossEntropyLoss(q_y_given_x_activations, y.to(torch.int64))
+                    print("Classification loss:{0}".format(classification_loss))
+                    classification_loss.backward()
+                    optimizer.step()
+            if epoch_id % validation_period == 0:
+                training_accuracy = self.validate(labeled_data=labeled_data)
+                print("Epoch {0} training accuracy:{1}".format(epoch_id, training_accuracy))
+                test_accuracy = self.validate(labeled_data=test_data)
+                print("Epoch {0} test accuracy:{1}".format(epoch_id, test_accuracy))
